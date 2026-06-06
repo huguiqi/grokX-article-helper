@@ -1,0 +1,25 @@
+# Secrets
+.env
+.env.claude
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/
+
+# 个人归档数据（不提交到仓库）
+2026/
+
+# Streamlit
+.streamlit/
+
+# 临时文件
+*.tmp
+*.swp
