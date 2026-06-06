@@ -56,7 +56,7 @@ Direct `requests` calls to xAI's OpenAI-compatible endpoints — `xai_chat_compl
 
 ## Key External Dependencies
 
-- **xAI API** (`https://api.x.ai/v1`): Chat completions (model `grok-4.3`) and image generation (`grok-imagine-image-quality`). Auth via `XAI_API_KEY` in `.env`.
+- **xAI API** (`https://api.x.ai/v1`): Chat completions (model `grok-4.3`) and image generation (`grok-imagine-image-quality`). Auth via `AI_API_KEY` in `.env`.
 - **twitter-cli** (`pipx install twitter-cli`): Posting to X. Auth via `TWITTER_AUTH_TOKEN` and `TWITTER_CT0` env vars (Cookie-based, set in shell profile, not in `.env`).
 
 ## Archive Format
