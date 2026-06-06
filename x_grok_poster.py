@@ -75,29 +75,53 @@ def _posting_progress_fragment():
 
 def daily_moments_ui():
     """日常朋友圈：短推文 + 双语 + 配图 + 直接发推"""
-    api_key = st.session_state.get("api_key", "")
+    # ---- 清除 flag（在 widget 创建前检查，避免 StreamlitAPIException） ----
+    if st.session_state.get("daily_clear"):
+        for k in ("daily_text", "daily_bilingual", "daily_candidates",
+                   "daily_selected_img", "daily_original_text", "daily_preview_show"):
+            st.session_state.pop(k, None)
+        st.session_state["daily_clear"] = False
+
+    from config import AI_API_KEY as _env_api_key
+    api_key = _env_api_key
     provider_name = st.session_state.get("provider_name", "")
     style_hint = st.session_state.get("style_hint", "")
 
+    def _apply_bilingual():
+        """on_click 回调：在 widget 创建前将翻译结果写入 session_state"""
+        text = st.session_state.get("daily_text", "")
+        if not text:
+            return
+        try:
+            # 保存原始中文（用于"清除翻译"恢复和重复翻译）
+            st.session_state["daily_original_text"] = text
+            result = translate_to_bilingual(api_key, text, provider_name)
+            st.session_state["daily_bilingual"] = result
+            st.session_state["daily_text"] = result
+        except Exception as e:
+            st.session_state["daily_error"] = str(e)
+
     # ---- 文本输入 ----
-    text = st.text_area("写点什么（≤140 中文字）", height=120, max_chars=140, key="daily_text")
+    text = st.text_area("写点什么", height=120, key="daily_text")
+    _err = st.session_state.pop("daily_error", None)
+    if _err:
+        st.error(f"翻译失败：{_err}")
     char_count = len(text)
-    st.caption(f"已输入 {char_count}/140 字")
+    if char_count > 150:
+        st.warning(f"已输入 {char_count}/150 字，超出 150 字的部分发布时将被截断")
+    else:
+        st.caption(f"已输入 {char_count}/150 字")
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🌐 双语内容", disabled=not text):
-            with st.spinner("翻译中..."):
-                try:
-                    result = translate_to_bilingual(api_key, text, provider_name)
-                    st.session_state.daily_bilingual = result
-                except Exception as e:
-                    st.error(f"翻译失败：{e}")
-            st.rerun()
+        st.button("🌐 双语内容", disabled=not text or not api_key, on_click=_apply_bilingual)
     with col2:
         if st.session_state.get("daily_bilingual"):
             if st.button("清除翻译"):
+                original = st.session_state.pop("daily_original_text", "")
                 st.session_state.daily_bilingual = ""
+                if original:
+                    st.session_state["daily_text"] = original
                 st.rerun()
 
     # ---- 配图区域 ----
@@ -113,6 +137,10 @@ def daily_moments_ui():
             except Exception as e:
                 st.error(f"生成配图失败：{e}")
         st.rerun()
+    if not api_key:
+        st.warning("请先在侧边栏填写 API Key")
+    elif not img_prompt:
+        st.info("请输入图片描述后点击生成")
 
     if st.session_state.get("daily_candidates"):
         st.markdown("**选择一张配图：**")
@@ -132,24 +160,24 @@ def daily_moments_ui():
                 else:
                     st.warning(f"图片 {i+1} 生成失败")
 
-    # ---- 预览区 ----
-    st.subheader("预览")
+    # ---- 预览区（点击按钮后才展示文案+配图） ----
     preview_text = text
-    if st.session_state.get("daily_bilingual"):
-        preview_text = f"{text}\n\n{st.session_state.daily_bilingual}"
-
-    st.text_area("预览文案", value=preview_text, height=150, disabled=True, key="daily_preview")
-
-    if st.session_state.get("daily_selected_img"):
-        img_path = st.session_state.daily_selected_img.get("local_path")
-        if img_path and Path(img_path).exists():
-            st.image(img_path, width=300)
+    selected_img = st.session_state.get("daily_selected_img")
+    if st.button("👁 预览", key="daily_preview_btn"):
+        st.session_state["daily_preview_show"] = True
+        st.rerun()
+    if st.session_state.get("daily_preview_show"):
+        st.text_area("预览文案", value=preview_text, height=150, disabled=True, key="daily_preview")
+        if selected_img:
+            img_path = selected_img.get("local_path")
+            if img_path and Path(img_path).exists():
+                st.image(img_path, width=300)
 
     # ---- 发送 ----
     st.divider()
     confirmed = st.checkbox("确认发送到 X", key="daily_confirm")
     if st.button("📤 发送X", disabled=not confirmed or not text):
-        final_text = preview_text
+        final_text = preview_text[:150]
         img_paths = []
         if st.session_state.get("daily_selected_img"):
             p = st.session_state.daily_selected_img.get("local_path")
@@ -159,11 +187,9 @@ def daily_moments_ui():
         ok, url, _ = post_single_tweet(final_text, img_paths)
         if ok:
             st.success(f"发送成功！{url}")
-            # 清空状态
-            st.session_state.daily_text = ""
-            st.session_state.daily_bilingual = ""
-            st.session_state.daily_candidates = []
-            st.session_state.daily_selected_img = None
+            # 设置清除 flag + rerun（避免 StreamlitAPIException）
+            st.session_state["daily_clear"] = True
+            st.rerun()
         else:
             st.error(f"发送失败：{url}")
 
@@ -496,12 +522,12 @@ def main():
             help="选择 AI 服务提供商"
         )
 
-        api_key = st.text_input(
-            "AI_API_KEY",
-            value=AI_API_KEY,
-            type="password",
-            help="各 provider 的 API Key，兼容旧 XAI_API_KEY"
-        )
+        if AI_API_KEY:
+            masked = AI_API_KEY[:4] + "****" + AI_API_KEY[-4:] if len(AI_API_KEY) > 8 else "****"
+            st.text_input("AI_API_KEY（来自 .env）", value=masked, disabled=True)
+        else:
+            st.warning("未检测到 .env 中的 AI_API_KEY，请先配置")
+        api_key = AI_API_KEY
         if not api_key:
             st.warning("请填写 API Key 才能调用 AI 润色和生成图片")
 
