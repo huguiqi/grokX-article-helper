@@ -7,6 +7,7 @@ Grok X 长文助手
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -78,9 +79,18 @@ def daily_moments_ui():
     # ---- 清除 flag（在 widget 创建前检查，避免 StreamlitAPIException） ----
     if st.session_state.get("daily_clear"):
         for k in ("daily_text", "daily_bilingual", "daily_candidates",
-                   "daily_selected_img", "daily_original_text", "daily_preview_show"):
+                   "daily_selected_img", "daily_original_text", "daily_preview_show",
+                   "daily_uploaded_name"):
             st.session_state.pop(k, None)
         st.session_state["daily_clear"] = False
+
+    # ---- 发送结果提示（在 widget 创建前显示，避免被 rerun 清掉） ----
+    if st.session_state.get("daily_post_ok"):
+        st.success("发送成功！")
+        st.session_state.pop("daily_post_ok", None)
+    if st.session_state.get("daily_post_fail"):
+        st.error("发送失败，请稍后重试")
+        st.session_state.pop("daily_post_fail", None)
 
     from config import AI_API_KEY as _env_api_key
     api_key = _env_api_key
@@ -128,15 +138,49 @@ def daily_moments_ui():
     st.subheader("配图（可选）")
     img_prompt = st.text_input("图片描述", key="daily_img_prompt")
 
-    if st.button("🎨 生成配图", disabled=not img_prompt or not api_key):
-        with st.spinner("正在生成 2 张候选图..."):
-            try:
-                imgs = generate_pair_images(api_key, img_prompt, style_hint, provider_name)
-                st.session_state.daily_candidates = imgs
-                st.session_state.daily_selected_img = None
-            except Exception as e:
-                st.error(f"生成配图失败：{e}")
-        st.rerun()
+    col_gen, col_upload = st.columns(2)
+    with col_gen:
+        if st.button("🎨 生成配图", disabled=not img_prompt or not api_key):
+            # 清除本地上传状态，避免干扰生成配图后的流程
+            st.session_state.pop("daily_uploaded_name", None)
+            with st.spinner("正在生成 2 张候选图..."):
+                try:
+                    imgs = generate_pair_images(api_key, img_prompt, style_hint, provider_name)
+                    # 复制到 yyyy/img/ 持久化目录
+                    img_dir = get_output_root() / str(datetime.now().year) / "img"
+                    img_dir.mkdir(parents=True, exist_ok=True)
+                    ts = datetime.now().strftime("%m%d_%H%M%S")
+                    for i, img in enumerate(imgs):
+                        src = img.get("local_path", "")
+                        if src and Path(src).exists():
+                            dest = img_dir / f"{ts}_{i}.png"
+                            shutil.copy2(src, dest)
+                            img["local_path"] = str(dest)
+                    st.session_state.daily_candidates = imgs
+                    st.session_state.daily_selected_img = None
+                except Exception as e:
+                    st.error(f"生成配图失败：{e}")
+            st.rerun()
+    with col_upload:
+        uploaded_img = st.file_uploader("📁 选择本地图片", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=False)
+        if uploaded_img:
+            uploaded_name = uploaded_img.name
+            if st.session_state.get("daily_uploaded_name") != uploaded_name:
+                # 新上传的文件，保存到临时目录
+                tmp_dir = Path(tempfile.gettempdir()) / "x_grok_poster"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                suffix = Path(uploaded_name).suffix or ".png"
+                saved_path = tmp_dir / f"daily_upload{suffix}"
+                saved_path.write_bytes(uploaded_img.getbuffer())
+                local_img = {"role": "local", "prompt": "", "url": "", "local_path": str(saved_path)}
+                st.session_state.daily_candidates = [local_img]
+                st.session_state.daily_selected_img = local_img
+                st.session_state["daily_uploaded_name"] = uploaded_name
+                st.rerun()
+        else:
+            # 用户清空了 file_uploader，也清除记录
+            if st.session_state.get("daily_uploaded_name"):
+                st.session_state.pop("daily_uploaded_name", None)
     if not api_key:
         st.warning("请先在侧边栏填写 API Key")
     elif not img_prompt:
@@ -186,12 +230,13 @@ def daily_moments_ui():
 
         ok, url, _ = post_single_tweet(final_text, img_paths)
         if ok:
-            st.success(f"发送成功！{url}")
-            # 设置清除 flag + rerun（避免 StreamlitAPIException）
+            st.session_state["daily_post_ok"] = True
             st.session_state["daily_clear"] = True
             st.rerun()
         else:
-            st.error(f"发送失败：{url}")
+            print(f"[朋友圈发送失败] {url}")
+            st.session_state["daily_post_fail"] = True
+            st.rerun()
 
 
 def article_ui():
