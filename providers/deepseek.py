@@ -17,7 +17,7 @@ class DeepSeekProvider(AIProvider):
 
     def chat_completion(self, api_key: str, messages: List[Dict],
                         model: str = None, temperature: float = 0.7) -> str:
-        url = f"{self.base_url()}/chat/completions"
+        url = f"{self.get_effective_base_url()}/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

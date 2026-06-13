@@ -25,3 +25,8 @@ class AIProvider(ABC):
 
     def base_url(self) -> str:
         return ""
+
+    def get_effective_base_url(self) -> str:
+        """返回实际使用的 base_url，AI_BASE_URL 环境变量优先"""
+        from config import AI_BASE_URL
+        return AI_BASE_URL or self.base_url()

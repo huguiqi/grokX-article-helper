@@ -292,3 +292,47 @@ def generate_pair_images(api_key: str, prompt: str, style_hint: str, provider_na
         else:
             results.append({"role": f"candidate-{i+1}", "prompt": full_prompt, "url": "", "local_path": ""})
     return results
+
+
+def generate_single_image(api_key: str, prompt: str, style_hint: str = "",
+                          aspect_ratio: str = "4:3", provider_name: str = None) -> Dict:
+    """生成单张图片，返回 {role, prompt, url, local_path}。role 由调用方赋值。"""
+    provider = get_provider(provider_name)
+    full_prompt = f"{prompt}. {style_hint}".strip() if style_hint else prompt
+    try:
+        model = AI_IMAGE_MODEL or provider.default_image_model() or None
+        url = provider.generate_image(api_key, full_prompt, model=model, aspect_ratio=aspect_ratio)
+        if url and url.startswith("http"):
+            tmp_dir = Path(tempfile.gettempdir()) / "x_grok_poster"
+            tmp_dir.mkdir(exist_ok=True)
+            local = tmp_dir / f"manual_{datetime.now().strftime('%H%M%S')}.png"
+            download_image(url, local)
+            return {"role": "", "prompt": full_prompt, "url": url, "local_path": str(local)}
+    except NotImplementedError:
+        pass
+    except Exception:
+        pass
+    fb = fallback_search_image(full_prompt, style_hint)
+    if fb.get("url"):
+        tmp_dir = Path(tempfile.gettempdir()) / "x_grok_poster"
+        tmp_dir.mkdir(exist_ok=True)
+        local = tmp_dir / f"manual_{datetime.now().strftime('%H%M%S')}.jpg"
+        download_image(fb["url"], local)
+        return {"role": "", "prompt": full_prompt, "url": fb["url"], "local_path": str(local)}
+    return {"role": "", "prompt": full_prompt, "url": "", "local_path": ""}
+
+
+# ====================== 发布长文到 X Articles ======================
+
+def publish_article_to_x(md_path) -> tuple:
+    """启动文章 HTTP 服务，返回 (success, message)"""
+    from article_server import start_article_server
+    try:
+        server = start_article_server(str(md_path))
+        return True, (
+            f"文章服务已启动：http://localhost:{server.port}\n"
+            f"文章：{server.payload.get('title', '(untitled)')}\n"
+            f"文本块：{len(server.payload.get('blocks', []))} | 图片：{len(server.payload.get('images', []))}"
+        )
+    except Exception as e:
+        return False, f"启动服务失败：{e}"

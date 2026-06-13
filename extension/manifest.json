@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Grok X 文章导入",
+  "version": "1.0",
+  "description": "从本地助手导入 Markdown 文章到 X Articles 编辑器",
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": [
+    "https://x.com/*",
+    "http://localhost:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*/articles/edit/*",
+        "https://x.com/compose/articles*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

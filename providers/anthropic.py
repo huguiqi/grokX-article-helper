@@ -17,7 +17,7 @@ class AnthropicProvider(AIProvider):
 
     def chat_completion(self, api_key: str, messages: List[Dict],
                         model: str = None, temperature: float = 0.7) -> str:
-        url = f"{self.base_url()}/v1/messages"
+        url = f"{self.get_effective_base_url()}/v1/messages"
         headers = {
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",

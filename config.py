@@ -19,6 +19,7 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "xAI")
 AI_API_KEY = os.getenv("AI_API_KEY") or os.getenv("XAI_API_KEY", "")
 AI_CHAT_MODEL = os.getenv("AI_CHAT_MODEL", "")
 AI_IMAGE_MODEL = os.getenv("AI_IMAGE_MODEL", "")
+AI_BASE_URL = os.getenv("AI_BASE_URL", "")
 
 
 def load_settings() -> dict:

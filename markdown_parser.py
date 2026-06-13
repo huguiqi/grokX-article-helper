@@ -899,7 +899,7 @@ def build_paste_plan(
 
         # ── 图片 ──
         if segment["type"] == "image":
-            result = image_results.get(i)
+            result = image_results.get(segment.get("source", "")) or image_results.get(i)
             if result and result.get("ok"):
                 is_cover = cover_source and _image_sources_match(segment.get("source"), cover_source)
                 add_image_operation(
@@ -976,12 +976,14 @@ def build_payload(md_path: str) -> dict:
     # 提取封面
     cover = extract_cover(meta, segments)
 
-    # 编码图片
-    image_results: Dict[int, dict] = {}
-    for i, seg in enumerate(segments):
+    # 编码图片（以 src 路径为键，与 build_paste_plan 的查找方式一致）
+    image_results: Dict[str, dict] = {}
+    for seg in segments:
         if seg.get("type") != "image":
             continue
         src = seg.get("source", "")
+        if not src or src in image_results:
+            continue
         try:
             if src.startswith("data:"):
                 # data URI
@@ -990,7 +992,7 @@ def build_payload(md_path: str) -> dict:
                     mime = (m.group(1) or "image/png").lower()
                     if m.group(2):
                         b64_data = re.sub(r"\s+", "", m.group(3))
-                        image_results[i] = {
+                        image_results[src] = {
                             "ok": True,
                             "base64": b64_data,
                             "mime": mime,
@@ -999,20 +1001,20 @@ def build_payload(md_path: str) -> dict:
                         }
             elif src.startswith("http"):
                 # 远程图片 — 不支持（标记为失败）
-                image_results[i] = {"ok": False, "error": "Remote images unsupported"}
+                image_results[src] = {"ok": False, "error": "Remote images unsupported"}
             else:
                 # 本地图片
                 full_path = src if src.startswith("/") else os.path.join(md_dir, src)
                 if os.path.isfile(full_path):
                     result = encode_image(full_path)
                     if result:
-                        image_results[i] = {"ok": True, **result}
+                        image_results[src] = {"ok": True, **result}
                     else:
-                        image_results[i] = {"ok": False, "error": f"Failed to encode: {full_path}"}
+                        image_results[src] = {"ok": False, "error": f"Failed to encode: {full_path}"}
                 else:
-                    image_results[i] = {"ok": False, "error": f"Not found: {full_path}"}
+                    image_results[src] = {"ok": False, "error": f"Not found: {full_path}"}
         except Exception as e:
-            image_results[i] = {"ok": False, "error": str(e)}
+            image_results[src] = {"ok": False, "error": str(e)}
 
     # 构建 paste plan
     paste_plan = build_paste_plan(segments, image_results, cover_source=cover)

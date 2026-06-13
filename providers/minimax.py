@@ -20,7 +20,7 @@ class MiniMaxProvider(AIProvider):
 
     def chat_completion(self, api_key: str, messages: List[Dict],
                         model: str = None, temperature: float = 0.7) -> str:
-        url = f"{self.base_url()}/v1/chat/completions"
+        url = f"{self.get_effective_base_url()}/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -38,7 +38,7 @@ class MiniMaxProvider(AIProvider):
 
     def generate_image(self, api_key: str, prompt: str,
                        model: str = None, aspect_ratio: str = "16:9") -> str:
-        url = f"{self.base_url()}/v1/image_generation"
+        url = f"{self.get_effective_base_url()}/v1/image_generation"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

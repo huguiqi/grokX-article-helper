@@ -42,6 +42,7 @@ from xai_api import (
     xai_chat_completion, xai_generate_image,
     polish_with_grok, generate_all_images,
     translate_to_bilingual, generate_pair_images,
+    publish_article_to_x,
 )
 from publisher import (
     post_single_tweet, split_into_chunks,
@@ -283,6 +284,20 @@ def article_ui():
     # Step 1
     st.header("1. 输入文章大致内容")
 
+    uploaded = st.file_uploader("上传已有 .md 作为起点", type=["md"])
+    if uploaded:
+        content = uploaded.read().decode("utf-8")
+        st.session_state["rough"] = content
+        h1_match = re.match(r'^\s*#\s+(.+)', content)
+        if h1_match:
+            st.session_state["title"] = h1_match.group(1).strip()
+        # 尝试在数据目录中找到原文件路径（用于后续直接发布，避免重复保存丢失图片）
+        source_path = None
+        for p in get_output_root().rglob(uploaded.name):
+            source_path = str(p)
+            break
+        st.session_state["source_md_path"] = source_path
+
     rough = st.text_area(
         "草稿（Markdown 或纯文本都行，可以很粗）",
         value=st.session_state.get("rough", ""),
@@ -290,14 +305,6 @@ def article_ui():
         placeholder="例如：我最近对比了 Claude 和 OpenClaw 写 PRD 的 token 消耗... 结论是 Claude 省但 OpenClaw 能干活...",
         key="rough",
     )
-
-    uploaded = st.file_uploader("上传已有 .md 作为起点", type=["md"])
-    if uploaded:
-        content = uploaded.read().decode("utf-8")
-        st.session_state.rough = content
-        h1_match = re.match(r'^\s*#\s+(.+)', content)
-        if h1_match:
-            st.session_state.title = h1_match.group(1).strip()
 
     title_hint = st.text_input("标题提示（可选）", value=st.session_state.get("title", ""))
 
@@ -319,7 +326,9 @@ def article_ui():
                 st.session_state.title = result.get("title", title_hint)
                 st.session_state.hashtags = result.get("suggested_hashtags", [])
                 st.session_state.image_prompts = result.get("image_prompts", [])
+                st.session_state.article_editable_prompts = [p.copy() for p in st.session_state.image_prompts]
                 st.session_state.images = []
+                st.session_state.manual_img_count = 0
                 st.success("润色完成！请在下方编辑并继续生成图片。")
                 st.rerun()
             except Exception as e:
@@ -368,16 +377,67 @@ def article_ui():
             else:
                 st.warning(f"{provider_name} 不支持图片生成。安装 claude-code-sdk 可自动获取配图，或切换到 xAI/chatGPT/miniMax")
 
-        if st.button("🎨 生成封面 + 配图", disabled=not api_key):
-                try:
-                    prompts = st.session_state.get("image_prompts", [])
-                    imgs = generate_all_images(api_key, prompts, style_hint, provider_name=provider_name)
-                    st.session_state.images = imgs
-                    st.success(f"已生成 {len([i for i in imgs if i['local_path']])} 张图片")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"生成图片失败：{e}")
+        # ---- 可编辑提示词列表 ----
+        editable = st.session_state.get("article_editable_prompts", [])
+        for i, p in enumerate(editable):
+            role_label = p.get("role", f"img-{i}")
+            editable[i]["prompt"] = st.text_input(
+                f"**{role_label}** 提示词",
+                value=p.get("prompt", ""),
+                key=f"article_prompt_{i}",
+            )
 
+        if st.button("➕ 添加配图提示词", key="article_add_prompt"):
+            editable.append({"role": f"illustration-{len(editable)}", "prompt": ""})
+            st.session_state.article_editable_prompts = editable
+            st.rerun()
+
+        # ---- 生成 + 上传 ----
+        gen_col, upload_col = st.columns(2)
+        with gen_col:
+            if st.button("🎨 生成封面 + 配图", disabled=not api_key):
+                    try:
+                        prompts = st.session_state.get("article_editable_prompts", [])
+                        imgs = generate_all_images(api_key, prompts, style_hint, provider_name=provider_name)
+                        st.session_state.images = imgs
+                        st.success(f"已生成 {len([i for i in imgs if i['local_path']])} 张图片")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"生成图片失败：{e}")
+
+        with upload_col:
+            uploaded_article_img_top = st.file_uploader(
+                "📁 选择本地图片",
+                type=["png", "jpg", "jpeg", "webp"],
+                accept_multiple_files=False,
+                key="article_local_img_top"
+            )
+            if uploaded_article_img_top:
+                upload_name = uploaded_article_img_top.name
+                track_key = "article_uploaded_img_name"
+                if st.session_state.get(track_key) != upload_name:
+                    tmp_dir = Path(tempfile.gettempdir()) / "x_grok_poster"
+                    tmp_dir.mkdir(parents=True, exist_ok=True)
+                    suffix = Path(upload_name).suffix or ".png"
+                    saved_path = tmp_dir / f"article_upload_{datetime.now().strftime('%H%M%S')}{suffix}"
+                    saved_path.write_bytes(uploaded_article_img_top.getbuffer())
+
+                    if "manual_img_count" not in st.session_state:
+                        st.session_state.manual_img_count = 0
+                    st.session_state.manual_img_count += 1
+                    n = st.session_state.manual_img_count
+                    local_img = {
+                        "role": f"illustration-manual-{n}",
+                        "prompt": "",
+                        "url": "",
+                        "local_path": str(saved_path)
+                    }
+                    st.session_state.images.append(local_img)
+                    st.session_state[track_key] = upload_name
+                    st.success(f"已添加本地图片 illustration-manual-{n}")
+                    st.rerun()
+
+        # ---- 已生成图片展示 + 单张重生成 ----
         if st.session_state.get("images"):
             st.subheader("已生成的图片（可修改提示词后单张重生成）")
             cols = st.columns(min(4, len(st.session_state.images)))
@@ -409,118 +469,76 @@ def article_ui():
                         except Exception as e:
                             st.error(f"重生成失败: {e}")
 
-    # Step 4
-    if st.session_state.get("polished") and st.session_state.get("images"):
+    # Step 4 — 有内容就显示（上传 MD 或 AI 润色均可）
+    has_content = st.session_state.get("polished") or st.session_state.get("rough")
+    if has_content:
         st.header("4. 预览 & 发布 / 存档")
 
-        use_thread = st.checkbox("发布为线程（推荐，图片分散在各条推文）", value=True)
+        # 优先用润色后的内容，否则用原始草稿
+        content_for_publish = st.session_state.get("polished") or st.session_state.get("rough", "")
 
         st.markdown("**最终文案预览（前 800 字）**")
-        preview_text = st.session_state.polished[:800]
+        preview_text = content_for_publish[:800]
         st.code(preview_text, language="markdown")
 
         img_paths = [i["local_path"] for i in st.session_state.images if i.get("local_path")]
+
+        # 检查是否已保存过（避免重复保存）
+        saved_md_path = st.session_state.get("saved_md_path")
+        already_saved = saved_md_path and Path(saved_md_path).exists()
 
         if st.button("💾 仅保存本地 Markdown + 图片（不发布）"):
             try:
                 md_path = archive_to_markdown(
                     st.session_state.title,
-                    st.session_state.polished,
+                    content_for_publish,
                     st.session_state.images,
                     st.session_state.hashtags
                 )
+                st.session_state.saved_md_path = str(md_path)
                 st.success(f"已保存到：{md_path}")
-                if st.button("📂 打开文件夹"):
-                    subprocess.call(["open", str(md_path.parent)])
             except Exception as e:
                 st.error(f"保存失败：{e}")
 
         st.divider()
 
-        confirmed = st.checkbox("✅ 我已仔细预览文案和图片，确认要用我的 X 账号发布（不可撤销）")
-        queue_state = post_queue.get()
-        is_posting = queue_state["status"] == "posting"
-
-        # 两个按钮并排
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            publish_clicked = st.button("📤 分段发布X并存档", disabled=not confirmed or not check_twitter_cli() or is_posting)
-        with btn_col2:
-            draft_clicked = st.button("📝 发长文章到X草稿箱")
+        draft_clicked = st.button("📝 发长文章到X草稿箱")
 
         if draft_clicked:
-            st.info("敬请期待！！")
-
-        if publish_clicked:
             try:
-                full_text = st.session_state.polished
-                if st.session_state.hashtags:
-                    full_text += "\n\n" + " ".join(st.session_state.hashtags)
-
-                if use_thread:
-                    chunks = split_into_chunks(full_text, [i["role"] for i in st.session_state.images])
-                    role_to_path = {i["role"]: i["local_path"] for i in st.session_state.images}
-                    chunk_with_paths = []
-                    for txt, roles in chunks:
-                        paths = [role_to_path.get(r, "") for r in roles]
-                        chunk_with_paths.append((txt, paths))
-
-                    # Compute archive dir for persistence
-                    now = datetime.now()
-                    archive_dir = get_output_root() / f"{now.year}" / f"{now.month}.{now.day}"
-                    archive_dir.mkdir(parents=True, exist_ok=True)
-
-                    post_queue.start(chunk_with_paths, archive_dir=archive_dir, title=st.session_state.title)
-                    st.rerun()
+                # 优先使用原始文件路径（从本地加载的 .md，避免重复保存丢失图片）
+                source_path = st.session_state.get("source_md_path")
+                if source_path and Path(source_path).exists():
+                    md_path = Path(source_path)
+                    st.info(f"使用原始文件：{md_path}")
+                elif already_saved:
+                    md_path = Path(saved_md_path)
+                    st.info(f"使用已保存的文件：{md_path}")
                 else:
-                    ok, url, _ = post_single_tweet(full_text, img_paths)
-                    if ok:
-                        st.session_state.posted_urls = [url]
-                        st.success("发布成功！")
-                        st.markdown(f"- {url}")
-                        md_path = archive_to_markdown(
-                            st.session_state.title, st.session_state.polished,
-                            st.session_state.images, st.session_state.hashtags,
-                            tweet_urls=[url],
-                        )
-                        st.info(f"已自动归档到：{md_path}")
-                    else:
-                        st.error(f"发布失败：{url}")
+                    md_path = archive_to_markdown(
+                        st.session_state.title,
+                        content_for_publish,
+                        st.session_state.images,
+                        st.session_state.hashtags,
+                    )
+                    st.session_state.saved_md_path = str(md_path)
+                    st.info(f"文章已保存到：{md_path}")
             except Exception as e:
-                st.error(f"发布过程出错：{e}")
+                st.error(f"保存 Markdown 失败：{e}")
+                st.stop()
 
-        # 发布队列状态
-        if queue_state["status"] == "posting":
-            _posting_progress_fragment()
-        elif queue_state["status"] == "done":
-            urls = queue_state["urls"]
-            st.session_state.posted_urls = urls
-            st.success(f"线程发布完成！共 {len(urls)} 条")
-            for u in urls:
-                st.markdown(f"- {u}")
-            if urls:
-                st.info(f"线程入口（从这里看完整线程）：{urls[-1]}")
-            md_path = archive_to_markdown(
-                st.session_state.title, st.session_state.polished,
-                st.session_state.images, st.session_state.hashtags,
-                tweet_urls=urls,
-            )
-            st.info(f"已自动归档到：{md_path}")
-            if st.button("📂 打开归档文件夹"):
-                subprocess.call(["open", str(md_path.parent)])
-            # Reset queue state
-            post_queue._update(status=None)
-        elif queue_state["status"] == "failed":
-            err = queue_state.get("error", "未知错误")
-            urls = queue_state.get("urls", [])
-            st.error(f"发布中断：{err}")
-            if urls:
-                st.warning(f"已成功发送 {len(urls)} 条：")
-                for u in urls:
-                    st.markdown(f"- {u}")
-            if st.button("🔄 重置发布状态"):
-                post_queue._update(status=None)
-                st.rerun()
+            success, msg = publish_article_to_x(md_path)
+
+            if success:
+                st.success("文章服务已启动！")
+                st.info(
+                    "👉 在 Chrome 打开 [x.com/compose/articles/new](https://x.com/compose/articles/new)，"
+                    "点击右上角「📥 载入文章」按钮导入文章"
+                )
+                with st.expander("服务详情"):
+                    st.code(msg, language="text")
+            else:
+                st.error(msg)
 
     if st.session_state.get("posted_urls"):
         st.success("上次发布链接：")
@@ -583,11 +601,16 @@ def main():
         except AttributeError:
             pass
 
+        DEFAULT_STYLE = "现代科技,插画风格，干净简洁，绿色主调，高对比度，适合技术博客和 X 平台展示"
+        settings = load_settings()
         style_hint = st.text_area(
             "全局视觉风格提示（可选）",
-            value="现代科技插画风格，干净简洁，蓝紫色主调，高对比度，适合技术博客和 X 平台展示",
+            value=settings.get("style_hint", DEFAULT_STYLE),
             height=80
         )
+        if style_hint != settings.get("style_hint", ""):
+            settings["style_hint"] = style_hint
+            save_settings(settings)
 
         st.divider()
         st.subheader("环境检查")

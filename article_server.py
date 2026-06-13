@@ -90,18 +90,82 @@ class ArticleHandler(BaseHTTPRequestHandler):
 
     def _handle_inject_script(self):
         payload_json = json.dumps(self.payload, ensure_ascii=False)
-        script = (
-            f'(async function __hermesMainInject(){{"use strict";'
-            f'{self.xpage_js};'
-            f'const payload={payload_json};'
-            f'console.log("[Hermes:MAIN] Injecting: "+payload.title);'
-            f'const result=await window.__xArticleWrite(payload);'
-            f'console.log("[Hermes:MAIN]",JSON.stringify(result,null,2));'
-            f'const el=document.createElement("meta");'
-            f'el.setAttribute("data-hermes-result",JSON.stringify(result));'
-            f'document.head.appendChild(el);'
-            f'return result;}})();'
-        )
+        wrapper = r"""
+console.log("[GrokX] inject-script loaded");
+(async function __grokxMain(){"use strict";
+""" + self.xpage_js + r"""
+;
+const payload=""" + payload_json + r""";
+console.log("[GrokX] Payload:",payload.title,"| images:",payload.images.length);
+for(let i=0;i<payload.images.length;i++){console.log("[GrokX] Image "+i+":",payload.images[i].fileName,"coverOnly="+payload.images[i].coverOnly,"b64len="+payload.images[i].base64.length);}
+console.log("[GrokX] Calling __xArticleWrite...");
+const result=await window.__xArticleWrite(payload);
+console.log("[GrokX] Result:",JSON.stringify(result,null,2));
+if(result.ok && result.summary){
+  console.log("[GrokX] Some images failed, attempting fallback upload...");
+  const sel='[data-contents="true"] [contenteditable="true"],[contenteditable="true"][role="textbox"]';
+  const editor=document.querySelector(sel);
+  if(editor){
+    const fiberKey=Object.keys(editor).find(k=>k.startsWith("__reactFiber$"));
+    if(fiberKey){
+      let fiber=editor[fiberKey];
+      for(let d=0;d<80&&fiber;d++){
+        if(fiber.stateNode?.props?.editorState){
+          const draftNode=fiber.stateNode;
+          const cs=draftNode.props.editorState.getCurrentContent();
+          let atomicCount=0;
+          cs.getBlockMap().forEach(b=>{if(b.getType()==="atomic")atomicCount++;});
+          const bodyImgCount=payload.images.filter(x=>!x.coverOnly).length;
+          console.log("[GrokX] Editor atomic blocks:",atomicCount,"expected body images:",bodyImgCount);
+          if(atomicCount<bodyImgCount){
+            console.log("[GrokX] No atomic blocks found, uploading body images via fallback...");
+            for(const img of payload.images){
+              if(img.coverOnly)continue;
+              try{
+                const bin=atob(img.base64);
+                const bytes=new Uint8Array(bin.length);
+                for(let j=0;j<bin.length;j++)bytes[j]=bin.charCodeAt(j);
+                const file=new File([bytes],img.fileName,{type:img.mime});
+                editor.focus();
+                document.execCommand("selectAll",false);
+                document.execCommand("moveToEndOfDocument",false);
+                const fiberKey2=Object.keys(editor).find(k=>k.startsWith("__reactFiber$"));
+                let f2=editor[fiberKey2];
+                let onFilesAdded=null;
+                for(let dd=0;dd<160&&f2;dd++){
+                  const props=f2.memoizedProps||f2.stateNode?.props;
+                  if(typeof props?.onFilesAdded==="function"){onFilesAdded=props.onFilesAdded;break;}
+                  let child=f2.child;
+                  for(let cd=0;cd<8&&child;cd++){
+                    const cp=child.memoizedProps||child.stateNode?.props;
+                    if(typeof cp?.onFilesAdded==="function"){onFilesAdded=cp.onFilesAdded;break;}
+                    child=child.child;
+                  }
+                  if(onFilesAdded)break;
+                  f2=f2.return;
+                }
+                if(onFilesAdded){
+                  console.log("[GrokX] Fallback uploading:",img.fileName);
+                  onFilesAdded([file]);
+                  await new Promise(r=>setTimeout(r,3000));
+                  console.log("[GrokX] Fallback upload done:",img.fileName);
+                }
+              }catch(e){console.error("[GrokX] Fallback upload error:",e);}
+            }
+          }
+          break;
+        }
+        fiber=fiber.return;
+      }
+    }
+  }
+}
+const el=document.createElement("meta");
+el.setAttribute("data-hermes-result",JSON.stringify(result));
+document.head.appendChild(el);
+return result;})();
+"""
+        script = wrapper
         body = script.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/javascript; charset=utf-8")

@@ -18,6 +18,7 @@
 |------|------|
 | 💬 日常朋友圈 | 短推文（≤150字），支持中英双语翻译 + 配图，一键发送 |
 | 📝 文章长文 | 草稿输入 → AI 润色 → 生成封面+配图 → 发布为线程 → 自动归档 |
+| 📰 X Articles 草稿 | 一键将 Markdown 文章推送到 X Articles 编辑器草稿箱（需安装 Chrome 扩展） |
 | 🎨 智能配图 | 支持 Grok Imagine / ChatGPT / DeepSeek 等多种 AI 生成图片 |
 | 📦 自动归档 | 发布后自动保存 Markdown + 图片到本地，格式兼容历史推文 |
 | 🔄 多 Provider | 支持 xAI / ChatGPT / DeepSeek / Anthropic / MiniMax |
@@ -75,6 +76,16 @@ export TWITTER_CT0=你的值
 twitter feed -n 1 --yaml
 ```
 
+### 安装 Chrome 扩展（用于 X Articles 草稿推送）
+
+```bash
+# 扩展文件在项目 extension/ 目录下
+# 1. Chrome 打开 chrome://extensions
+# 2. 开启右上角「开发者模式」
+# 3. 点击「加载已解压的扩展程序」
+# 4. 选择项目下的 extension/ 目录
+```
+
 ### 启动
 
 ```bash
@@ -98,11 +109,12 @@ streamlit run x_grok_poster.py
 ### 文章长文
 
 1. 切换到 **📝 文章长文** tab
-2. 粘贴草稿内容（支持 Markdown 或纯文本）
+2. 粘贴草稿内容（支持 Markdown 或纯文本，也可从本地上传 .md 文件）
 3. 点击「✨ 使用 AI 润色改写」→ 编辑润色结果
 4. 点击「🎨 生成封面 + 配图」→ 可修改提示词重生成
-5. 预览 → 选择线程/单条 → 确认发布
-6. 自动归档到 `2026/MM.DD/` 目录
+5. 选择发布方式：
+   - **发推文线程**：预览 → 确认发布 → 自动归档到 `2026/MM.DD/` 目录
+   - **发到 X 草稿箱**：点击「📝 发长文章到X草稿箱」→ 在 Chrome 打开 x.com/compose/articles/new → 点击右上角「📥 载入文章」按钮 → 检查内容后手动 Publish
 
 ---
 
@@ -110,22 +122,29 @@ streamlit run x_grok_poster.py
 
 ```
 .
-├── x_grok_poster.py      # Streamlit UI 入口
-├── xai_api.py            # AI 调用层（润色 + 翻译 + 图片生成）
-├── publisher.py           # Twitter 发布 + 线程队列
-├── archive.py             # Markdown 归档
-├── config.py              # 配置加载 + 工具函数
-├── providers/             # AI Provider 抽象层
-│   ├── base.py            # 基类
-│   ├── xai.py             # xAI (Grok)
-│   ├── chatgpt.py         # OpenAI ChatGPT
-│   ├── deepseek.py        # DeepSeek
-│   ├── anthropic.py       # Anthropic Claude
-│   └── minimax.py         # MiniMax
-├── img/                   # 项目图片资源
-├── .env.example           # 环境变量模板
-├── requirements.txt       # Python 依赖
-└── LICENSE                # MIT License
+├── x_grok_poster.py       # Streamlit UI 入口
+├── xai_api.py             # AI 调用层（润色 + 翻译 + 图片生成 + 文章发布）
+├── publisher.py            # Twitter 发布 + 线程队列
+├── archive.py              # Markdown 归档
+├── config.py               # 配置加载 + 工具函数
+├── markdown_parser.py      # Markdown → X Articles payload 解析器
+├── article_server.py       # X Articles HTTP 服务（端口 8765）
+├── xpage.js                # X 页面注入引擎（Draft.js + React Fiber）
+├── providers/              # AI Provider 抽象层
+│   ├── base.py             # 基类
+│   ├── xai.py              # xAI (Grok)
+│   ├── chatgpt.py          # OpenAI ChatGPT
+│   ├── deepseek.py         # DeepSeek
+│   ├── anthropic.py        # Anthropic Claude
+│   └── minimax.py          # MiniMax
+├── extension/              # Chrome 扩展（X Articles 草稿推送）
+│   ├── manifest.json       # 扩展清单
+│   ├── content.js          # 内容脚本（注入按钮 + 拉取 payload）
+│   └── background.js       # 后台脚本
+├── img/                    # 项目图片资源
+├── .env.example            # 环境变量模板
+├── requirements.txt        # Python 依赖
+└── LICENSE                 # MIT License
 ```
 
 ---
@@ -149,6 +168,8 @@ streamlit run x_grok_poster.py
 - **发帖报错** → 先单独运行 `twitter post "测试"` 确认认证有效
 - **想换图片风格** → 在侧边栏修改「全局视觉风格提示」
 - **Provider 不支持图片** → 自动通过 Claude Agent SDK 搜索免费图库获取配图
+- **X Articles 扩展按钮不出现** → 确认在 `x.com/compose/articles` 或 `x.com/*/articles/edit/` 页面，刷新扩展
+- **X Articles 提示无法连接** → 确认已点击「发长文章到X草稿箱」启动服务（端口 8765）
 
 ---
 
